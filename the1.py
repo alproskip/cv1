@@ -39,6 +39,8 @@ def per_channel_histogram(img, interval=1):
     
 
 def normalize_histogram(h):
+    norm = np.sum(h)
+    normalized_hist = h/np.sum(h)
     return h/np.sum(h)
 
 
