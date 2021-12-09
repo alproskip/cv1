@@ -6,30 +6,33 @@ from tqdm import tqdm
 EPSILON = 10**(-20)
 
 def per_channel_histogram(img, interval=1):
-    x , y = img.shape[0], img.shape[1]
+    red = np.bincount(np.ravel(img[:,:,0]), minlength=256)
+    green = np.bincount(np.ravel(img[:,:,1]), minlength=256)
+    blue = np.bincount(np.ravel(img[:,:,2]), minlength=256)
     histograms = {
-        'red':np.zeros(256, np.int16), 
-        'green':np.zeros(256, np.int16), 
-        'blue':np.zeros(256, np.int16)
+        'red':red, 
+        'green':green, 
+        'blue':blue
         }
-    for i in range(x):
-        for j in range(y):
-            histograms['red'][img[i][j][0]] += 1
-            histograms['green'][img[i][j][1]] += 1
-            histograms['blue'][img[i][j][2]] += 1
     if interval == 1:
         return histograms
-    bin_num = 256 // interval
-    new_histograms = {
-        'red':np.zeros(bin_num, np.int16), 
-        'green':np.zeros(bin_num, np.int16), 
-        'blue':np.zeros(bin_num, np.int16)
-        }
+
+    bin_num = 256//interval
+    new_red = np.zeros(bin_num)
+    new_green = np.zeros(bin_num)
+    new_blue = np.zeros(bin_num)
+
     for i in range(bin_num):
-        for j in range(interval):
-            new_histograms['red'][i] += histograms['red'][i * interval + j]
-            new_histograms['green'][i] += histograms['green'][i * interval + j]
-            new_histograms['blue'][i] += histograms['blue'][i * interval + j]
+        new_red[i] = np.sum(red[i*interval:(i+1)*interval])
+        new_green[i] = np.sum(green[i*interval:(i+1)*interval])
+        new_blue[i] = np.sum(blue[i*interval:(i+1)*interval])
+        
+    new_histograms = {
+        'red':new_red, 
+        'green':new_green, 
+        'blue':new_blue
+        }
+        
     return new_histograms
 
 def color_histogram(img, interval=1):
@@ -44,32 +47,33 @@ def color_histogram(img, interval=1):
     return histogram
     
 def normalize_histogram(h):
+    if np.sum(h) == 0:
+        h[h==0] = EPSILON
+        return h
     norm = np.sum(h)
     normalized_hist = np.divide(h,np.sum(h))
     normalized_hist[normalized_hist==0] = EPSILON / norm
     return normalized_hist
 
-def get_histogram_by_grids(img, interval=1, grid_count=1):
+def get_per_channel_histogram_by_grids(img, interval=1, grid_count=96):
     grid_size = img.shape[0]//grid_count
     histogram_list = np.zeros(0)
-    for i in range(grid_count):
-        for j in range(grid_count):
-            img_slice = img[i*grid_size:(i+1)*grid_size,j*grid_size:(j+1)*grid_size]
+    for i in range(grid_size):
+        for j in range(grid_size):
+            img_slice = img[i*grid_count:(i+1)*grid_count,j*grid_count:(j+1)*grid_count]
             slice_hist = per_channel_histogram(img_slice, interval)
             normalized_hist = {'red':normalize_histogram(slice_hist['red']), 'green':normalize_histogram(slice_hist['green']), 'blue':normalize_histogram(slice_hist['blue'])}
             histogram_list = np.append(histogram_list, normalized_hist)
     return histogram_list
 
-def get_color_histogram_by_grids(img, interval=1, grid_count=1):
+def get_color_histogram_by_grids(img, interval=1, grid_count=96):
     grid_size = img.shape[0]//grid_count
     histogram_list = []
-    for i in range(grid_count):
-        for j in range(grid_count):
-            img_slice = img[i*grid_size:(i+1)*grid_size,j*grid_size:(j+1)*grid_size]
+    for i in range(grid_size):
+        for j in range(grid_size):
+            img_slice = img[i*grid_count:(i+1)*grid_count,j*grid_count:(j+1)*grid_count]
             slice_hist = color_histogram(img_slice, interval)
-            
             normalized_hist = normalize_histogram(slice_hist)
-            # print(normalized_hist)
             histogram_list.append(normalized_hist)
     return np.asarray(histogram_list)
 
@@ -82,9 +86,8 @@ def kl_divergence(query_hist, support_hist):
 
 def kl_divergence_by_grids(query_hist_list, support_hist_list):
     divergence_array = np.zeros(0)
-    hist_count = query_hist_list.shape[0]
     for qh,sh in zip(query_hist_list, support_hist_list):
-        divergence = kl_divergence(qh['red'], sh['red']) + kl_divergence(qh['green'], sh['green']) + kl_divergence(qh['blue'], sh['blue'])
+        divergence = (kl_divergence(qh['red'], sh['red']) + kl_divergence(qh['green'], sh['green']) + kl_divergence(qh['blue'], sh['blue'])) / 3
         divergence_array = np.append(divergence_array, divergence)
     return np.average(divergence_array)
 
@@ -94,7 +97,6 @@ def kl_divergence_by_grids_color_histogram(query_hist_list, support_hist_list):
         divergence = kl_divergence(qh, sh)
         divergence_array = np.append(divergence_array, divergence)
     return np.average(divergence_array)
-
 
 if __name__ == '__main__':
     # Read Images
@@ -122,65 +124,124 @@ if __name__ == '__main__':
         with Image.open('dataset/query_3/{}'.format(filename)) as image:
             query_3_images.append((filename, np.asarray(image)))
 
-    grid_count = 12
-    color_histogram_list_by_grids = {}
-    support_query_1_color_hist_lists = {'support_histograms':[], 'query_histograms':[]}
-    support_query_2_color_hist_lists = {'support_histograms':[], 'query_histograms':[]}
-    support_query_3_color_hist_lists = {'support_histograms':[], 'query_histograms':[]}
-    interval = 16
+    while(True):
+        try:
+            q_num = input("Type query number for comparison: ")
+            query_images = [query_1_images, query_2_images, query_3_images][int(q_num)-1]    
+            a = input("Choose a histogram type. Type p for per channel and c for color histogram:\nHistogram Type: ")
+            b = input("Type quantization interval (default 1): ")
+            interval = int(b) if b else 1
+            c = input("Type grid dimension, press enter for default 96x96, 1 grid: ")
+            grid_count = int(c) if c else 96
 
-    for name, img in tqdm(support_images):
-        hist_list = get_color_histogram_by_grids(img, interval=interval, grid_count=grid_count)
-        support_query_1_color_hist_lists['support_histograms'].append((name, hist_list))
-        support_query_2_color_hist_lists['support_histograms'].append((name, hist_list))
-    
-    for name, img in tqdm(query_1_images):
-        hist_list = get_color_histogram_by_grids(img, interval=interval, grid_count=grid_count)
-        support_query_1_color_hist_lists['query_histograms'].append((name, hist_list))
-    
-    # get histograms of query 2    
-    for name, img in tqdm(query_2_images):
-        hist_list = get_color_histogram_by_grids(img, interval=interval, grid_count=grid_count)
-        support_query_2_color_hist_lists['query_histograms'].append((name, hist_list))
+            if a == 'p':
+                if c:
+                    support_query_hist_lists = {'support_histograms':[], 'query_histograms':[]}
 
-    color_histogram_list_by_grids[grid_count] = {'q1':support_query_1_color_hist_lists, 'q2':support_query_2_color_hist_lists, 'q3':support_query_3_color_hist_lists}
+                    print("Reading Files...")
+                    for name, img in tqdm(support_images, leave=False):
+                        hist_list = get_per_channel_histogram_by_grids(img, interval=interval, grid_count=grid_count)
+                        support_query_hist_lists['support_histograms'].append((name, hist_list))
+                    
+                    for name, img in tqdm(query_images, leave=False):
+                        hist_list = get_per_channel_histogram_by_grids(img, interval=interval, grid_count=grid_count)
+                        support_query_hist_lists['query_histograms'].append((name, hist_list))
+                    print("Reading Files Done")
+                    
+                    correct_guesses = 0
+                    for name, support_hist in tqdm(support_query_hist_lists['support_histograms'], leave=False):
+                        min_divergence = 999999
+                        for q_name, query_hist in support_query_hist_lists['query_histograms']:
+                            divergence = kl_divergence_by_grids(query_hist, support_hist)
+                            if divergence < min_divergence:
+                                min_divergence = divergence
+                                result = {'support': name, 'query': q_name, 'divergence': divergence}
+                        if result['support'] == result['query']:
+                            correct_guesses += 1
+                    print(f"{grid_count}x{grid_count} Grid - Accuracy: {correct_guesses / 200} ")           
+                else:
+                    support_histograms = []
+                    query_histograms = []
 
-    
-    # query 1 color histogram spatial grids
-    query_1_results_by_grids_color_histograms = {}
-    grid_counts = [12]
-    for grid_count in grid_counts:
-        correct_guesses = 0
-        support_hist_list = color_histogram_list_by_grids[grid_count]['q1']['support_histograms']
-        query_hist_list = color_histogram_list_by_grids[grid_count]['q1']['query_histograms']
-        for name, support_hist in tqdm(support_hist_list):
-            min_divergence = 999999
-            for q_name, query_hist in query_hist_list:
-                divergence = kl_divergence_by_grids_color_histogram(query_hist, support_hist)
-                # print(divergence)
-                if divergence < min_divergence:
-                    min_divergence = divergence
-                    result = {'support': name, 'query': q_name, 'divergence': divergence}
-            if result['support'] == result['query']:
-                correct_guesses += 1
-        print(f"Grid_count: {grid_count}, acc: {correct_guesses / 200}")
-        query_1_results_by_grids_color_histograms[f"Grid_count: {grid_count}"] = correct_guesses / 200
-    print(query_1_results_by_grids_color_histograms)
-    # query 2 color histogram spatial grids
-    query_2_results_by_grids_color_histograms = {}
-    for grid_count in grid_counts:
-        correct_guesses = 0
-        support_hist_list = color_histogram_list_by_grids[grid_count]['q2']['support_histograms']
-        query_hist_list = color_histogram_list_by_grids[grid_count]['q2']['query_histograms']
-        for name, support_hist in tqdm(support_hist_list):
-            min_divergence = 999999
-            for q_name, query_hist in query_hist_list:
-                divergence = kl_divergence_by_grids_color_histogram(query_hist, support_hist)
-                if divergence < min_divergence:
-                    min_divergence = divergence
-                    result = {'support': name, 'query': q_name, 'divergence': divergence}
-            if result['support'] == result['query']:
-                correct_guesses += 1
-        print(f"Grid_count: {grid_count}, acc: {correct_guesses / 200}")
-        query_2_results_by_grids_color_histograms[f"Grid_count: {grid_count}"] = correct_guesses / 200
-    print(query_2_results_by_grids_color_histograms)
+                    print("Reading Files...")
+                    for name, img in tqdm(support_images, leave=False):
+                        hist = per_channel_histogram(img, interval)
+                        support_histograms.append((name, (normalize_histogram(hist['red']),normalize_histogram(hist['green']), normalize_histogram(hist['blue']))))
+                    
+                    for name, img in tqdm(query_images, leave=False):
+                        hist = per_channel_histogram(img, interval)
+                        query_histograms.append((name, (normalize_histogram(hist['red']),normalize_histogram(hist['green']), normalize_histogram(hist['blue']))))
+                    print("Reading Files Done")
+        
+                    correct_guesses = 0
+                    for name, hist in tqdm(support_histograms, leave=False):
+                        min_divergence = 9999
+                        for q_name, q_hist in query_histograms:
+                            red_divergence = kl_divergence(q_hist[0], hist[0])
+                            green_divergence = kl_divergence(q_hist[1], hist[1])
+                            blue_divergence = kl_divergence(q_hist[2], hist[2])
+                            divergence = (red_divergence + blue_divergence + blue_divergence) / 3
+                            if divergence < min_divergence:
+                                min_divergence = divergence
+                                result = {'support': name, 'query': q_name, 'divergence': divergence}
+                        if result['support'] == result['query']:
+                            correct_guesses += 1
+                    print(f"Accuracy is {correct_guesses/200} for interval: {interval}")
+            
+            elif a == 'c':
+                if c:
+                    support_query_hist_lists = {'support_histograms':[], 'query_histograms':[]}
+                    print("Reading Files...")
+                    for name, img in tqdm(support_images, leave=False):
+                        hist_list = get_color_histogram_by_grids(img, interval=interval, grid_count=grid_count)
+                        support_query_hist_lists['support_histograms'].append((name, hist_list))
+                    
+                    for name, img in tqdm(query_images, leave=False):
+                        hist_list = get_color_histogram_by_grids(img, interval=interval, grid_count=grid_count)
+                        support_query_hist_lists['query_histograms'].append((name, hist_list))
+                    print("Reading Files Done")
+
+                    correct_guesses = 0
+                    support_hist_list = support_query_hist_lists['support_histograms']
+                    query_hist_list = support_query_hist_lists['query_histograms']
+                    for name, support_hist in tqdm(support_hist_list, leave=False):
+                        min_divergence = 999999
+                        for q_name, query_hist in query_hist_list:
+                            divergence = kl_divergence_by_grids_color_histogram(query_hist, support_hist)
+                            if divergence < min_divergence:
+                                min_divergence = divergence
+                                result = {'support': name, 'query': q_name, 'divergence': divergence}
+                        if result['support'] == result['query']:
+                            correct_guesses += 1
+                    print(f"{grid_count}x{grid_count} Grid - Accuracy: {correct_guesses / 200} ")           
+                
+                else:
+                    support_histograms = []
+                    query_histograms = []
+
+                    print("Reading Files...")
+                    for name, img in tqdm(support_images, leave=False):
+                        hist = normalize_histogram(color_histogram(img, interval))
+                        support_histograms.append((name, hist))
+
+                    for name, img in tqdm(query_images, leave=False):
+                        hist = normalize_histogram(color_histogram(img, interval))
+                        query_histograms.append((name, hist))
+                    print("Reading Files Done")
+
+                    correct_guesses = 0
+                    for name, hist in tqdm(support_histograms, leave=False):
+                        min_divergence = 99999
+                        for q_name, q_hist in query_histograms:
+                            divergence = kl_divergence(q_hist, hist)
+                            if divergence < min_divergence:
+                                min_divergence = divergence
+                                result = {'support': name, 'query': q_name, 'divergence': divergence}
+                        if result['support'] == result['query']:
+                            correct_guesses += 1
+                    print(f"Accuracy is {correct_guesses/200} for interval: {interval}")
+            else: raise
+        
+        except Exception as e:
+            print(e)
+            print("Invalid argument given\nAvailable query numbers 1, 2 or 3\nAvailable histogram types 'p' or 'c'\n")
